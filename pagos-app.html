@@ -1527,43 +1527,81 @@ function renderPagosTable() {
 
   empty.style.display = 'none';
   const pagados = cp.filter(p=>p.pagado==='SI').length;
-  document.getElementById('pagos-count').textContent = `${cp.length} ítems · ${pagados} pagados`;
+  const pendiente = cp.filter(p=>p.pagado!=='SI').reduce((s,p)=>s+p.a_pagar,0);
+  document.getElementById('pagos-count').textContent =
+    `${cp.length} ítems · ${pagados} pagados · pendiente ${fmt(pendiente)}`;
 
-  tbody.innerHTML = cp.map((p,i) => {
+  // Sort by category order, then preserve sheet order within category
+  const CAT_ORDER = ['TARJETAS','CASITA','SEGUROS','PERSONAL','HIJOS','INVERSION','SERVICIOS','OTRO'];
+  const catIdx = c => { const i = CAT_ORDER.indexOf((c||'').toUpperCase()); return i>=0 ? i : 99; };
+  const sorted = [...cp].sort((a,b) => {
+    const ca = catIdx(a.categoria), cb = catIdx(b.categoria);
+    if (ca !== cb) return ca - cb;
+    return a._row - b._row; // preserve sheet order within category
+  });
+
+  tbody.innerHTML = sorted.map((p) => {
+    // Find original index in cp for toggle/edit/delete
+    const origIdx = cp.indexOf(p);
     const d = p.fecha_vto ? daysFrom(parseDateStr(p.fecha_vto)) : null;
     const usd = mep && p.a_pagar ? (p.a_pagar/mep) : 0;
     const isPagado = p.pagado === 'SI';
+    const isVencido = !isPagado && d !== null && d < 0;
+    const isHoy = !isPagado && d === 0;
+    const isManana = !isPagado && d === 1;
 
+    // Row background color
+    let rowBg = '';
+    if (isPagado) rowBg = 'background:rgba(184,240,96,0.04);';
+    else if (isVencido) rowBg = 'background:rgba(255,79,79,0.06);';
+    else if (isHoy) rowBg = 'background:rgba(255,171,64,0.06);';
+
+    // Left border color indicator
+    let borderLeft = '';
+    if (isPagado) borderLeft = 'border-left:3px solid rgba(184,240,96,0.5);';
+    else if (isVencido) borderLeft = 'border-left:3px solid rgba(255,79,79,0.7);';
+    else if (isHoy) borderLeft = 'border-left:3px solid rgba(255,171,64,0.7);';
+    else if (isManana) borderLeft = 'border-left:3px solid rgba(90,180,255,0.5);';
+    else borderLeft = 'border-left:3px solid transparent;';
+
+    // Fecha con badge
     let fechaHtml = fmtDate(p.fecha_vto);
-    if (d!==null && !isPagado) {
+    if (d !== null && !isPagado) {
       let cls='db-ok', txt='';
-      if(d<0){cls='db-vencido';txt=`Vence hace ${Math.abs(d)}d`;}
-      else if(d===0){cls='db-hoy';txt='Hoy';}
+      if(d<0){cls='db-vencido';txt=`hace ${Math.abs(d)}d`;}
+      else if(d===0){cls='db-hoy';txt='HOY';}
       else if(d===1){cls='db-manana';txt='Mañana';}
-      else if(d<=7){cls='db-pronto';txt=`${d} días`;}
+      else if(d<=7){cls='db-pronto';txt=`${d}d`;}
       if(txt) fechaHtml += ` <span class="dias-badge ${cls}">${txt}</span>`;
     }
 
-    const rowStyle = isPagado ? 'opacity:0.45;' : '';
+    // A pagar color
+    let apagarColor = '';
+    if (isPagado) apagarColor = 'color:var(--accent)';
+    else if (isVencido) apagarColor = 'color:var(--red)';
+    else if (p.a_pagar > 500000) apagarColor = 'color:var(--orange)';
 
-    return `<tr style="${rowStyle}">
+    // Concepto style
+    const concStyle = isPagado ? 'color:var(--text-dim);text-decoration:line-through' : '';
+
+    return `<tr style="${rowBg}${borderLeft}">
       <td class="td-tipo"><span class="tipo-${p.tipo.toLowerCase()}">${p.tipo}</span></td>
       <td class="td-cat">${p.categoria}</td>
-      <td class="td-concepto">${p.concepto}</td>
-      <td class="td-monto" style="color:var(--text-dim)">${fmt(p.monto_ars)}</td>
+      <td class="td-concepto" style="${concStyle}">${p.concepto}</td>
+      <td class="td-monto" style="color:var(--text-muted)">${fmt(p.monto_ars)}</td>
       <td class="td-debito">${p.debito_aut?fmt(p.debito_aut):'—'}</td>
-      <td class="td-apagar" style="${p.a_pagar>500000?'color:var(--orange)':''}">${fmt(p.a_pagar)}</td>
+      <td class="td-apagar" style="${apagarColor}">${fmt(p.a_pagar)}</td>
       <td class="td-usd">${mep&&usd?fmtUSD(usd):'—'}</td>
       <td class="td-fecha">${fechaHtml}</td>
       <td class="td-medio">${p.medio_pago||'—'}</td>
       <td>
-        <button class="toggle-pagado ${isPagado?'si':''}" onclick="togglePagado(${i})">
+        <button class="toggle-pagado ${isPagado?'si':''}" onclick="togglePagado(${origIdx})">
           ${isPagado?'✓ PAGADO':'○ PAGAR'}
         </button>
       </td>
       <td class="td-actions">
-        <button class="btn-edit" onclick="editPago(${i})" title="Editar">✎</button>
-        <button class="btn-del" onclick="deletePago(${i})" title="Eliminar">✕</button>
+        <button class="btn-edit" onclick="editPago(${origIdx})" title="Editar">✎</button>
+        <button class="btn-del" onclick="deletePago(${origIdx})" title="Eliminar">✕</button>
       </td>
     </tr>`;
   }).join('');
@@ -1635,7 +1673,10 @@ function renderSubs() {
     <div class="sub-card ${s.activa!=='SI'?'inactiva':''}">
       <div class="sub-card-top">
         <span class="sub-name">${s.concepto}</span>
-        <button class="sub-toggle ${s.activa==='SI'?'activa':''}" onclick="toggleSub(${i})" title="${s.activa==='SI'?'Desactivar':'Activar'}"></button>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="btn-edit" onclick="openSubModal(${i})" title="Editar">✎</button>
+          <button class="sub-toggle ${s.activa==='SI'?'activa':''}" onclick="toggleSub(${i})" title="${s.activa==='SI'?'Desactivar':'Activar'}"></button>
+        </div>
       </div>
       <div class="sub-meta">${s.tarjeta||'—'}${s.notas?' · '+s.notas:''}</div>
       <div class="sub-monto">U$S ${s.monto_usd.toFixed(0)}/mes</div>
